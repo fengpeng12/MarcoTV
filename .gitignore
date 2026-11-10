@@ -10,3 +10,5 @@ __pycache__/
 *.pyc
 *.apk
 *.log
+# 临时移出的嵌套 .git，不入库
+MarcoTV/.git-hold/
