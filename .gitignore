@@ -1,0 +1,12 @@
+# 云构建只需源码与脚本：排除产物、工具链、展示图片与嵌套仓库
+repo.git
+MarcoTV/.git/
+MarcoTV/build/
+MarcoTV/.tools/
+MarcoTV/dist/
+MarcoTV/private/
+MarcoTV/docs/showcase/assets/
+__pycache__/
+*.pyc
+*.apk
+*.log

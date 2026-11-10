@@ -1,0 +1,161 @@
+{
+  "version": "0.1.2",
+  "package": "com.pilipala.tvhome.lite",
+  "compile_api": 14,
+  "min_api": 14,
+  "shared_sources": [
+    "ClockScene.java",
+    "MotionSpring.java",
+    "PreviewPreferences.java"
+  ],
+  "bytes": 308626,
+  "sha256": "ea06ef9ca03cfd792ec3be37f85e5d4a356f3120cc7a63ea19e7cde98837d576",
+  "physical_android4_tv_verified": false,
+  "upgrade_from_0_1_0_install_verified": true,
+  "optimization_evidence": {
+    "previous_apk_bytes": 4326802,
+    "current_apk_bytes": 308626,
+    "apk_reduction_percent_rounded": 93,
+    "static_desktop_observation_ms": 2200,
+    "static_desktop_periodic_redraws_observed": 0,
+    "physical_tv_performance_claim": false
+  },
+  "author": "Pilipala",
+  "edition": "Lite",
+  "status": "experimental",
+  "date": "2026-10-29",
+  "full_edition_changed": false,
+  "full_edition_latest": "0.14.2",
+  "emulator": {
+    "android": "4.0.2",
+    "api": 14,
+    "architecture": "armeabi-v7a",
+    "ram_mb": 512,
+    "display_configuration": "1280x720",
+    "view_capture": "1280x672",
+    "gpu": "off",
+    "image_url": "https://dl.google.com/android/repository/sys-img/android/sysimg_armv7a-14_r02.zip",
+    "image_archive_sha1": "d8991b0c06b18d7d6ed4169d67460ee1add6661b",
+    "tools_url": "https://dl.google.com/android/repository/tools_r25.2.5-windows.zip",
+    "tools_archive_sha1": "a7f7ebeae1c8d8f62d3a8466e9c81baee7cc31ca"
+  },
+  "local_checks": {
+    "layout_checks": 8,
+    "apk_checks": {
+      "separate_package": true,
+      "api14_manifest": true,
+      "no_privileged_or_network_permissions": true,
+      "no_background_services_or_receivers": true,
+      "old_dalvik_dex_035": true,
+      "no_full_edition_system_classes": true,
+      "font_licenses_bundled": true,
+      "four_static_fonts_bundled": true,
+      "apk_crc": true,
+      "no_native_arch_dependency": true,
+      "lite_wallpapers_only": true,
+      "compressed_wallpapers_budget": true
+    }
+  },
+  "local_check_count": 20,
+  "runtime_passed": [
+    "actual_android_api_is_14",
+    "lite_has_separate_package",
+    "launcher_apps_discovered",
+    "apps_unique_and_icon_cache_bounded",
+    "wallpaper_decoded_under_memory_budget",
+    "dpad_moves_to_second_card",
+    "dpad_returns_to_first_card",
+    "up_focuses_header",
+    "header_opens_magic_desktop",
+    "position_preview_is_reversible_draft",
+    "back_discards_draft",
+    "save_commits_height",
+    "home_intent_discards_unsaved_draft",
+    "defaults_require_save",
+    "local_backup_restores_parameters",
+    "invalid_backup_keeps_settings",
+    "four_static_clock_fonts_render_on_api14",
+    "wake_confirm_does_not_open_menu",
+    "settings_back_returns_to_desktop",
+    "status_back_returns_one_level",
+    "status_back_restores_parent_focus",
+    "magic_back_restores_settings_and_discards_draft",
+    "magic_save_returns_to_settings",
+    "ambient_size_changes_preview_pixels",
+    "ambient_dim_changes_preview_pixels",
+    "normal_parameters_restore_desktop_preview",
+    "motion_off_draft_snaps_preview",
+    "motion_on_draft_animates_preview",
+    "resume_reuses_catalog_and_icons",
+    "pin_uses_cache",
+    "hide_uses_cache",
+    "restore_hidden_uses_cache",
+    "all_hidden_has_clear_empty_state",
+    "idle_timer_schedules_event_not_one_second_poll",
+    "paused_view_stops_frame_and_timer_loop",
+    "resume_restarts_desktop",
+    "repeated_refresh_coalesces_to_two_scans",
+    "async_scan_preserves_current_selection",
+    "static_desktop_has_no_periodic_redraw",
+    "dispatched_long_press_opens_app_menu",
+    "long_press_release_does_not_activate_menu",
+    "application_launch_leaves_lite"
+  ],
+  "runtime_check_count": 42,
+  "all_executed_checks_passed": true,
+  "dex_version": "035",
+  "signature_verified_min_api": 14,
+  "zipalign_verified": true,
+  "not_verified": [
+    "physical Android 4 television",
+    "OEM Home button interception and default HOME selection",
+    "physical remote key mapping and long press",
+    "power off/wake and OEM screensaver",
+    "long-duration performance and memory pressure",
+    "Android 4.0.3/4.0.4, 4.1-5.x",
+    "other processor architectures and display resolutions"
+  ],
+  "screen_capture_kind": "Runtime View.draw(Canvas) on Android 4.0.2 emulator, not physical television capture",
+  "source_tests": [
+    "lite/tests/LiteDeviceChecks.java",
+    "lite/tests/LiteSettingsChecks.java",
+    "scripts/test_lite.py",
+    "scripts/test_lite_device.py",
+    "lite/tests/LiteStabilityChecks.java",
+    "scripts/test_lite_stability.py"
+  ],
+  "screenshots": [
+    {
+      "path": "docs/assets/lite-clock-api14.png",
+      "sha256": "e40a021bc56663adf01b052f07fc02d3e9691044c0c39e7cce9f4955c46aeed1"
+    },
+    {
+      "path": "docs/assets/lite-home-api14.png",
+      "sha256": "2e27a3c02822dfcdc3e638e6686f69ebcbbea203629853bf7204a51dd2091939"
+    },
+    {
+      "path": "docs/assets/lite-magic-api14.png",
+      "sha256": "85a04d82f1cd4cb62d8c6278581d0eb2c50402a96d5b1c3c3a0db1c7331d3d98"
+    },
+    {
+      "path": "docs/assets/lite-magic-saver-api14.png",
+      "sha256": "8e21359c51f5c3a75cac88e4d3649e3b1806b67d2d4932697408e5107ca1980c"
+    }
+  ],
+  "stability_passed": [
+    "pause_resume_preserves_system_settings_return_location",
+    "temporary_pause_keeps_unsaved_magic_draft",
+    "saved_instance_state_restores_draft",
+    "home_still_discards_preserved_draft",
+    "existing_clock_follows_new_timezone",
+    "failed_restore_commit_reports_failure",
+    "800_dispatched_direction_events_keep_valid_selection",
+    "100_nested_navigation_cycles_restore_focus",
+    "50_wake_confirm_cycles_do_not_activate_app",
+    "three_view_sizes_render_without_exception"
+  ],
+  "stability_check_count": 10,
+  "total_lite_check_count": 72,
+  "upgrade_from_0_1_1_install_verified": true,
+  "state_restoration_scope": "Bundle save/restore and same-instance lifecycle callbacks; full process death not verified"
+}

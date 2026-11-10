@@ -1,0 +1,392 @@
+// Copyright (C) 2026 Pilipala
+// SPDX-License-Identifier: GPL-3.0-only
+package com.pilipala.tvhome;
+
+import android.Manifest;
+import android.app.*;
+import android.content.*;
+import android.content.pm.*;
+import android.os.Build;
+import android.provider.Settings;
+import android.util.Log;
+import java.net.*;
+import java.text.DateFormat;
+import java.util.*;
+
+final class SystemIntegration {
+    interface DialogHost {
+        void show(TvDialog dialog);
+    }
+    private static final String TAG = "MarcoTVSystem";
+    private static final String OWN_SERVICE = "com.pilipala.tvhome/.HomeKeyService";
+
+    static SharedPreferences prefs(Context context) {
+        Context storage = Build.VERSION.SDK_INT >= 24 ? context.createDeviceProtectedStorageContext() : context;
+        return storage.getSharedPreferences("system_integration", Context.MODE_PRIVATE);
+    }
+    static boolean authorized(Context context) {
+        return context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED;
+    }
+    static Intent homeIntent(Context context) {
+        return new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+    }
+    static final long ADB_RESTORE_WINDOW = 24L * 60 * 60 * 1000;
+    /** adb_restore_until 0 or missing = long-term (explicit choice, or enabled before time limits existed). */
+    static String adbRestoreLabel(Context context) {
+        expireAdbRestore(context);
+        SharedPreferences p = prefs(context);
+        if (!p.getBoolean("adb_restore", false)) return "未开启";
+        long until = p.getLong("adb_restore_until", 0);
+        if (until <= 0) return "已开启（长期）";
+        long hours = Math.max(1, (until - System.currentTimeMillis() + 3599999) / 3600000);
+        return "已开启（约 " + hours + " 小时后自动停止）";
+    }
+    /** Ends a timed ADB restore window. The current debugging switch is left as it is. */
+    static boolean expireAdbRestore(Context context) {
+        SharedPreferences p = prefs(context);
+        long until = p.getLong("adb_restore_until", 0);
+        if (!p.getBoolean("adb_restore", false) || until <= 0 || System.currentTimeMillis() < until) return false;
+        p.edit().putBoolean("adb_restore", false).remove("adb_restore_until")
+                .putString("last_notice", "ADB 自动恢复已到设定时长并自动停止；调试开关保持当前状态，可在开发者选项中手动关闭。").apply();
+        Diagnostics.event("ADB_RESTORE_EXPIRED");
+        return true;
+    }
+    static boolean needsRecovery(Context context) {
+        expireAdbRestore(context);
+        SharedPreferences p = prefs(context);
+        return p.getBoolean("adb_restore", false) || p.getBoolean("home_compat", false) || p.getBoolean("managed_home", false);
+    }
+    static void startRecovery(Context context) {
+        TaskBridgeClient.sync(context);
+        Intent intent = new Intent(context, RecoveryService.class);
+        if (!needsRecovery(context) || !authorized(context)) {
+            context.stopService(intent);
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
+            else context.startService(intent);
+        } catch (RuntimeException e) {
+            prefs(context).edit().putString("last_error", "系统阻止后台恢复，请打开 Marco TV 后重试。").apply();
+            Log.w(TAG, "Cannot start recovery", e);
+        }
+    }
+    static String currentHome(Context context) {
+        // CATEGORY_DEFAULT is required: OEM firmware keeps its launcher as the fallback
+        // answer without it, even when another home is the registered preference.
+        ResolveInfo result = context.getPackageManager().resolveActivity(new Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_HOME).addCategory(Intent.CATEGORY_DEFAULT), PackageManager.MATCH_DEFAULT_ONLY);
+        return result == null || result.activityInfo == null ? "" : new ComponentName(result.activityInfo.packageName, result.activityInfo.name)
+                .flattenToString();
+    }
+    static boolean homeIsOurs(Context context) {
+        if(BuildEdition.RESTRICTED)return false;
+        // A stored preference is not enough: OEM firmware may still route HOME elsewhere.
+        return currentHome(context).startsWith(context.getPackageName() + "/");
+    }
+    static boolean homePreferenceIsOurs(Context context) {
+        if(BuildEdition.RESTRICTED)return false;
+        if (homeIsOurs(context)) return true;
+        ArrayList<IntentFilter> filters = new ArrayList<>();
+        ArrayList<ComponentName> names = new ArrayList<>();
+        try {
+            context.getPackageManager().getPreferredActivities(filters, names, null);
+        }
+        catch (RuntimeException e) {
+            return false;
+        }
+        for (int i=0;i<names.size()&&i<filters.size();i++) if (names.get(i).getPackageName().equals(context.getPackageName())&&filters.get(i)
+                .hasAction(Intent.ACTION_MAIN)&&filters.get(i).hasCategory(Intent.CATEGORY_HOME)) return true;
+        return false;
+    }
+    static void rememberHome(Context context) {
+        if (prefs(context).contains("original_home")) return;
+        String home = currentHome(context);
+        ComponentName component = ComponentName.unflattenFromString(home);
+        if (component != null && !component.getPackageName().equals(context.getPackageName())
+                && !component.getPackageName().equals("android")) prefs(context).edit().putString("original_home", home)
+                .apply();
+    }
+    static void refreshHomeService(Context context) {
+        SharedPreferences p = prefs(context);
+        if (p.getInt("home_filter_revision", 0) >= 1 || !p.getBoolean("home_compat", false) || !authorized(context)) return;
+        // Android 9 retains old accessibility metadata across an APK upgrade.
+        // Rebind only our service once; preserve every other enabled service.
+        Set<String> current = services(Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES));
+        for (String s : new ArrayList<>(current)) if (own(s)) current.remove(s);
+        try {
+            writeServices(context, current);
+            p.edit().putInt("home_filter_revision", 1).apply();
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> recover(context), 300);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Home key service refresh failed", e);
+        }
+    }
+    private static Set<String> services(String value) {
+        Set<String> out = new LinkedHashSet<>();
+        if (value != null) for (String entry : value.split(":")) if (ComponentName.unflattenFromString(entry) != null) out.add(entry);
+        return out;
+    }
+    private static boolean competing(String value) {
+        ComponentName name = ComponentName.unflattenFromString(value);
+        return name != null && (name.getPackageName().equals("com.spocky.projengmenu") || name.getPackageName()
+                .equals("com.maric.adbkeeper") || name.getPackageName().equals("com.terence.accessibilitykeeper"));
+    }
+    private static boolean own(String value) {
+        ComponentName name = ComponentName.unflattenFromString(value);
+        return name != null && name.equals(ComponentName.unflattenFromString(OWN_SERVICE));
+    }
+    private static String join(Set<String> values) {
+        StringBuilder s = new StringBuilder();
+        for (String value : values) {
+            if (s.length() > 0) s.append(':');
+            s.append(value);
+        }
+        return s.toString();
+    }
+    /** Last accessibility state written by Marco TV in this process, to tell our writes from the user's. */
+    private static volatile String writtenServices;
+    private static volatile int writtenEnabled = -1;
+    private static void writeServices(Context context, Set<String> wanted) {
+        String current = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        String next = join(wanted);
+        writtenServices = next;
+        writtenEnabled = wanted.isEmpty() ? 0 : 1;
+        if (!next.equals(current)) Settings.Secure.putString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, next);
+        int enabled = wanted.isEmpty() ? 0 : 1;
+        if (Settings.Secure.getInt(context.getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 0) != enabled)
+                Settings.Secure.putInt(context.getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, enabled);
+    }
+    static boolean removeOwnHomeService(Context context) {
+        try {
+            Set<String> wanted = services(Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES));
+            for (String service : new ArrayList<>(wanted)) if (own(service)) wanted.remove(service);
+            writeServices(context, wanted);
+            return !HomeSetup.serviceEnabled(context);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+    static void recover(Context context) {
+        SharedPreferences p = prefs(context);
+        if (!authorized(context)) {
+            p.edit().putString("last_error", "尚未获得一次性系统设置授权").apply();
+            return;
+        }
+        expireAdbRestore(context);
+        boolean unlocked = HomeSetup.unlocked(context);
+        if (unlocked) respectExternalHomeServiceOff(context, false);
+        try {
+            if (p.getBoolean("adb_restore", false) && Settings.Global.getInt(context.getContentResolver(), Settings.Global.ADB_ENABLED, 0) != 1) {
+                boolean written = Settings.Global.putInt(context.getContentResolver(), Settings.Global.ADB_ENABLED, 1);
+                if (!written) throw new IllegalStateException("ADB setting rejected");
+                p.edit().putLong("last_adb_restore", System.currentTimeMillis()).apply();
+                Diagnostics.event("ADB_SWITCH_RESTORED");
+                Log.i(TAG, "Restored adb_enabled=1");
+            }
+            if (unlocked && !HomeSetup.paused(context) && p.getBoolean("home_compat", false)) {
+                Set<String> wanted = services(Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES));
+                if (p.getBoolean("home_compat", false)) {
+                    for (String service : new ArrayList<>(wanted)) if (own(service)) wanted.remove(service);
+                    wanted.add(OWN_SERVICE);
+                }
+                writeServices(context, wanted);
+                p.edit().putBoolean("compat_seen_present", HomeSetup.serviceEnabled(context)).apply();
+            }
+            p.edit().remove("last_error").putLong("last_check", System.currentTimeMillis()).apply();
+        } catch (RuntimeException e) {
+            p.edit().putString("last_error", "恢复失败：" + e.getClass().getSimpleName()).apply();
+            Diagnostics.event("SYSTEM_RECOVERY_FAILED");
+            Log.w(TAG, "Settings recovery failed", e);
+        }
+    }
+    /**
+     * External changes cannot identify the actor. Pause rather than guess user versus OEM.
+     * Only our own in-process rebind or an explicit in-progress consent may restore a service.
+     */
+    static boolean respectExternalHomeServiceOff(Context context, boolean observedChange) {
+        SharedPreferences p = prefs(context);
+        if (!HomeSetup.unlocked(context) || !p.getBoolean("home_compat", false) || HomeSetup.paused(context)
+                || p.getBoolean("setup_accessibility_pending", false)) return false;
+        String services = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        int enabled = Settings.Secure.getInt(context.getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 0);
+        String normalized = services == null ? "" : services;
+        boolean ours = writtenServices != null && writtenServices.equals(normalized) && writtenEnabled == enabled;
+        boolean present = false;
+        for (String s : services(services)) if (own(s)) present = true;
+        if (!HomeSetupPolicy.pauseForExternalChange(true, true, ours, present && enabled == 1)) return false;
+        HomeSetup.pause(context, "Home 服务已被关闭，来源无法确定。自动恢复已暂停，请在桌面启用向导确认后继续。");
+        p.edit().putString("last_notice", "Home 服务状态发生变化，已暂停恢复，等待你确认。").apply();
+        Diagnostics.event("HOME_SERVICE_CHANGE_NEEDS_CONFIRMATION");
+        Log.i(TAG, "Home service unavailable; recovery paused pending consent");
+        return true;
+    }
+    /**
+     * BOOT_COMPLETED only, before reconcile(). Some firmware clears third-party
+     * accessibility services while booting. Restore only our own entry, only when the
+     * user consented to compatibility, recovery is not paused, and the previous session
+     * last saw the service present (a runtime removal pauses and clears that marker).
+     */
+    static boolean restoreCompatAfterBoot(Context context) {
+        SharedPreferences p = prefs(context);
+        if (!authorized(context) || !HomeSetup.unlocked(context) || HomeSetup.paused(context)
+                || !p.getBoolean("home_compat", false) || p.getBoolean("setup_accessibility_pending", false)
+                || !p.getBoolean("compat_seen_present", false) || HomeSetup.serviceEnabled(context)) return false;
+        try {
+            Set<String> wanted = services(Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES));
+            for (String service : new ArrayList<>(wanted)) if (own(service)) wanted.remove(service);
+            wanted.add(OWN_SERVICE);
+            writeServices(context, wanted);
+            boolean restored = HomeSetup.serviceEnabled(context);
+            if (restored) p.edit().putString("last_notice", "电视重启时 Home 服务被系统关闭，已按之前的设置恢复，其他辅助服务未改动。").apply();
+            Diagnostics.event(restored ? "HOME_SERVICE_RESTORED_AFTER_BOOT" : "HOME_SERVICE_BOOT_RESTORE_REJECTED");
+            return restored;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Boot restore of home service failed", e);
+            return false;
+        }
+    }
+    static void enableHome(Context context, boolean enabled) {
+        if(BuildEdition.RESTRICTED)return;
+        context.getPackageManager().setComponentEnabledSetting(new ComponentName(context, "com.pilipala.tvhome.HomeActivity"),
+                enabled ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED : PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP);
+    }
+    private static void prepareHome(Context context) {
+        rememberHome(context);
+        SharedPreferences p = prefs(context);
+        if (!p.contains("saved_competing_services")) {
+            Set<String> saved = new LinkedHashSet<>();
+            for (String service : services(Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)))
+                    if (competing(service)) saved.add(service);
+            p.edit().putString("saved_competing_services", join(saved)).apply();
+        }
+        p.edit().putBoolean("managed_home", true).putBoolean("boot_home", true).apply();
+        enableHome(context, true);
+        recover(context);
+        startRecovery(context);
+    }
+    private static void permissionHelp(Activity activity, DialogHost host) {
+        host.show(new TvDialog.Builder(activity).setTitle("此功能需要系统允许")
+                .setMessage("ADB 自动恢复属于高级功能，需要一次系统授权。\n\n如果只想让 Home 回到 Marco TV，先使用「桌面启用」，标准桌面选择无需这项权限。\n\n需要高级功能时，可在更多设置方式中尝试本机增强设置，或用手机查看授权说明。")
+                .setPositiveButton("打开桌面启用", (d,w)->((MainActivity)activity).defaultHome.show())
+                .setNeutralButton("手机查看向导", (d,w)->((MainActivity)activity).defaultHome.assistant())
+                .setNegativeButton("稍后", null).create());
+    }
+    static void show(Activity activity, DialogHost host) {
+        SharedPreferences p = prefs(activity);
+        rememberHome(activity);
+        boolean ownHome = homeIsOurs(activity);
+        String[] items = {
+                "ADB 自动恢复：" + adbRestoreLabel(activity),
+                "状态中心", "桌面启用与检查",
+                "开机打开 Marco TV：" + (p.getBoolean("boot_home", false) ? "已开启" : "未开启"),
+                "Home 键兼容模式：" + (p.getBoolean("home_compat", false) ? "已开启" : "未开启"),
+                "恢复设置前的桌面", "唤醒后恢复桌面：" + (activity.getSharedPreferences("home",0).getBoolean("recent_wake",true)?"已开启":"未开启"), "立即执行已启用的恢复", "调试与授权说明",
+                "Home 长按与原厂兼容"};
+        host.show(new TvDialog.Builder(activity).setPageId("startup").setTitle("系统与启动")
+                .setMessage("当前默认桌面：" + (ownHome ? "Marco TV" : "厂商或其他桌面")
+                + "\n唤醒恢复还需开启 Home 兼容并连接任务辅助服务；只打开偏好不代表已经生效。"
+                + (ownHome ? "" : "\n需要设置或修复时，选择「桌面启用与检查」，按本机检测结果继续。"))
+                .setOrder("startup","adb","status","home","boot","home_key","restore","wake","recover","help","home_gestures")
+                .setItems(items, (d, which) ->
+                activity.getWindow().getDecorView().post(() -> {
+            switch (which) {
+                case 0:
+                    boolean next = !p.getBoolean("adb_restore", false);
+                    if (next && !authorized(activity)) {
+                    permissionHelp(activity, host);
+                    break;
+                    }
+                    if (next) host.show(new TvDialog.Builder(activity).setTitle("开启 ADB 自动恢复")
+                            .setMessage("开机后恢复调试开关，运行期间被关闭时也会恢复。\n\n调试开关打开期间，同一网络中的设备可以请求连接电视（仍需在电视上确认授权）。建议只在需要时开启：默认 24 小时后自动停止恢复，调试开关保持当时状态。\n\n网络 ADB 还需系统保留端口配置；本功能不会关闭设备授权验证。")
+                            .setPositiveButton("开启 24 小时", (dialog, button) -> {
+                    p.edit().putBoolean("adb_restore", true).putLong("adb_restore_until", System.currentTimeMillis() + ADB_RESTORE_WINDOW)
+                            .remove("last_notice").apply();
+                    recover(activity);
+                    startRecovery(activity);
+                    show(activity,host);
+                    })
+                            .setNeutralButton("长期开启", (dialog, button) -> {
+                    p.edit().putBoolean("adb_restore", true).putLong("adb_restore_until", 0).remove("last_notice")
+                            .apply();
+                    recover(activity);
+                    startRecovery(activity);
+                    show(activity,host);
+                    })
+                            .setNegativeButton("返回", null).create());
+                    else {
+                    p.edit().putBoolean("adb_restore", false).remove("adb_restore_until").apply();
+                    startRecovery(activity);
+                    show(activity,host);
+                    }
+                    break;
+                case 1:
+                    status(activity, host);
+                    break;
+                case 2:
+                    ((MainActivity)activity).defaultHome.show();
+                    break;
+                case 3:
+                    p.edit().putBoolean("boot_home", !p.getBoolean("boot_home", false)).apply();
+                    show(activity,host);
+                    break;
+                case 4:
+                    if (p.getBoolean("home_compat", false)) {
+                    HomeSetup.pause(activity, "你已关闭 Home 兼容；重新开启前不会恢复。");
+                    Set<String> wanted = services(Settings.Secure.getString(activity.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES));
+                    for (String service : new ArrayList<>(wanted)) if (own(service)) wanted.remove(service);
+                    if (authorized(activity)) writeServices(activity, wanted);
+                    startRecovery(activity);
+                    show(activity,host);
+                    } else ((MainActivity)activity).defaultHome.compatibility();
+                    break;
+                case 5:
+                    ((MainActivity)activity).defaultHome.restore();
+                    break;
+                case 6:
+                    activity.getSharedPreferences("home",0).edit().putBoolean("recent_wake",!activity.getSharedPreferences("home",0)
+                            .getBoolean("recent_wake",true)).apply();
+                    TaskBridgeClient.sync(activity);
+                    show(activity,host);
+                    break;
+                case 7:
+                    host.show(new TvDialog.Builder(activity).setPageId("recovery_confirm").setTitle("执行已启用的恢复？")
+                            .setMessage("仅执行当前已启用的 ADB / Home 恢复设置，可能重新打开调试开关或恢复自身 Home 服务；不新增授权。唤醒恢复另外需要 Home 兼容和已连接的任务辅助服务。")
+                            .setPositiveButton("执行恢复",(dialog,button)->{
+                    recover(activity);
+                    startRecovery(activity);
+                    status(activity,host);
+                    })
+                            .setNegativeButton("取消",null).create());
+                    break;
+                case 9:
+                    homeGestures(activity,host);
+                    break;
+                case 8:
+                    host.show(new TvDialog.Builder(activity).setTitle("调试与授权")
+                            .setMessage("可在「桌面启用」中尝试一键设置。需要时在电视打开网络调试并允许连接；不支持本机授权的电视可使用手机或电脑助手。\n\n卸载应用或恢复出厂设置后可能需要重新授权。持续调试恢复需另行开启，端口能否恢复取决于电视固件。")
+                            .setPositiveButton("查看授权方法", (dialog, button) -> permissionHelp(activity, host))
+                            .setNegativeButton("返回", null).create());
+                    break;
+            }
+        })).setNegativeButton("返回", null).create());
+    }
+    static void homeGestures(Activity activity,DialogHost host){
+        SharedPreferences p=prefs(activity);
+        boolean nativeKeys=p.getBoolean("home_native_keys",false);
+        String action=p.getString("home_long_action","system");
+        host.show(new TvDialog.Builder(activity).setPageId("home_gestures").setTitle("Home 按键")
+                .setMessage("短按返回桌面，双击可打开 Marco 最近任务。长按默认请求系统任务界面；厂商可能不支持。原厂模式会完整放行按键，短按可能经过原桌面，双击也可能受系统限制。")
+                .setItems(new String[]{"长按：系统最近任务"+(action.equals("system")?" ✓":""),"长按：Marco 最近任务"+(action.equals("marco")?" ✓":""),"长按：不执行操作"+(action.equals("none")?" ✓":""),
+                "保留原厂 Home 按键："+(nativeKeys?"已开启":"未开启"),"双击响应间隔"},(d,w)->{
+            if(w==4){((MainActivity)activity).navigator.personalization("recent_double_ms");return;}
+            if(w==3)p.edit().putBoolean("home_native_keys",!nativeKeys).apply();
+            else p.edit().putString("home_long_action",new String[]{"system","marco","none"}[w]).apply();
+            homeGestures(activity,host);
+        }).setNegativeButton("返回",null).create());
+    }
+    private static void status(Activity activity, DialogHost host) {
+        if(activity instanceof MainActivity)((MainActivity)activity).health.status();
+    }
+}

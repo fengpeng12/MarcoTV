@@ -1,0 +1,33 @@
+Marco TV
+Copyright (C) 2026 Pilipala
+Author: Pilipala
+https://github.com/Pilipala9919/MarcoTV
+
+Marco TV source code, original documentation and bundled generated wallpapers
+are distributed under GPL-3.0-only, unless a file states a different license.
+See LICENSE for the complete license text.
+
+本软件免费开源。如果你付费购买了本软件，请尽快向购买平台申请退款。
+此提示说明 Pilipala 的免费发行政策和退款建议，不额外限制 GPL 授予的权利。
+
+Third-party resources:
+- Material Design Icons font and TV icon geometry: Google / Material Design
+  Authors, Apache License 2.0. The unmodified license is in
+  licenses/Material-Icons-Apache-2.0.txt and bundled in the app.
+- Android system typefaces are supplied by the operating system; they are not
+  redistributed in this repository.
+- Other applications' icons and banners are read from installed packages at
+  runtime; they are not bundled with Marco TV. Their names and marks belong to
+  their respective owners.
+
+- QR Code generator (Java), Copyright (c) Project Nayuki, MIT License.
+  Source: https://github.com/nayuki/QR-Code-generator
+  Revision: 3c6d0b3cefb4e049dc337e82237c9644399716a8
+  License: licenses/QR-Code-generator-MIT.txt (also available in the app).
+
+- Clock digit fonts: Roboto Flex (The Roboto Flex Project Authors), Barlow
+  Condensed (Jeremy Tribby), Nunito (The Nunito Project Authors), Bodoni Moda
+  (The Bodoni Moda Project Authors), SIL Open Font License 1.1.
+  Modified static digit subsets are named Marco Clock A/B/C/D. Source hashes,
+  variation coordinates and subset details: app/src/main/assets/fonts/sources.json.
+  Full upstream copyrights and licenses: licenses/*-OFL.txt, also bundled in-app.

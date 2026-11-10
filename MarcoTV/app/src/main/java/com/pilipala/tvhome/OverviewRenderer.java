@@ -1,0 +1,125 @@
+// Copyright (C) 2026 Pilipala
+// SPDX-License-Identifier: GPL-3.0-only
+package com.pilipala.tvhome;
+
+import android.graphics.*;
+
+/** Draws the home scene, or the Magic Desktop preview that tilts it into a card beside the settings panel. */
+final class OverviewRenderer {
+    private final HomeView view;
+    private final Camera overviewCamera=new Camera();
+    private final Matrix overviewMatrix=new Matrix();
+    private Bitmap overviewBitmap;
+    private Canvas overviewCanvas;
+    private BitmapShader overviewShader;
+    private final Paint overviewPaint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
+    private PreviewBackdrop overviewBackdrop=new PreviewBackdrop();
+    private final RectF bounds=new RectF(),frame=new RectF();
+    private final Matrix bufferMatrix=new Matrix();
+    private final Path previewCutout=new Path(),outerMask=new Path();
+
+    OverviewRenderer(HomeView view) {
+        this.view = view;
+    }
+
+    void detach() {
+        overviewBackdrop.clear();
+        if(overviewBitmap!=null)overviewBitmap.recycle();
+        overviewBitmap=null;
+        overviewCanvas=null;
+        overviewShader=null;
+    }
+
+    void backdrop(PreviewBackdrop prepared){
+        overviewBackdrop.clear();
+        overviewBackdrop=prepared;
+    }
+
+    /** @param overview 0 for the plain home screen, 1 for the fully projected preview */
+    void draw(Canvas canvas, float overview) {
+        if(overview<=0){
+            // Keep the tiny prepared blur across editor visits; the wallpaper loader replaces it.
+            if(overviewBitmap!=null){
+                overviewBitmap.recycle();
+                overviewBitmap=null;
+                overviewCanvas=null;
+                overviewShader=null;
+            }
+            view.drawScene(canvas);
+            return;
+        }
+        overviewBackdrop.draw(canvas,view.wallpaper,view.getWidth(),view.getHeight());
+        float density=view.getResources().getDisplayMetrics().density;
+        overviewCamera.save();
+        overviewCamera.setLocation(0,0,-Math.max(12,view.getWidth()/72f));
+        overviewCamera.rotateY(12*overview);
+        overviewCamera.getMatrix(overviewMatrix);
+        overviewCamera.restore();
+        overviewMatrix.preTranslate(-view.getWidth()/2f,-view.getHeight()/2f);
+        bounds.set(0,0,view.getWidth(),view.getHeight());
+        overviewMatrix.mapRect(bounds);
+        float available=Math.max(view.getWidth()*.25f,view.getWidth()-364*density);
+        float targetScale=Math.min(available/bounds.width(),view.getHeight()*.78f/bounds.height());
+        float size=1-(1-targetScale)*overview;
+        overviewMatrix.postScale(size,size);
+        float targetCenter=24*density+available/2;
+        overviewMatrix.postTranslate(view.getWidth()/2f+(targetCenter-view.getWidth()/2f)*overview-bounds.centerX()*size,view.getHeight()/2f-bounds.centerY()*size);
+        float radius=40*density*overview;
+        if(canvas.isHardwareAccelerated()){
+            // Live previews stay on the GPU; mask outer corners in screen space so 3D perspective never bypasses rounded clipping.
+            int transformed=canvas.save();
+            canvas.concat(overviewMatrix);
+            frame.set(0,0,view.getWidth(),view.getHeight());
+            previewCutout.reset();
+            previewCutout.addRoundRect(frame,radius,radius,Path.Direction.CW);
+            int clipped=canvas.save();
+            canvas.clipPath(previewCutout);
+            view.drawScene(canvas);
+            canvas.restoreToCount(clipped);
+            canvas.restoreToCount(transformed);
+            previewCutout.transform(overviewMatrix);
+            outerMask.reset();
+            outerMask.setFillType(Path.FillType.EVEN_ODD);
+            outerMask.addRect(-2*density,-2*density,view.getWidth()+2*density,view.getHeight()+2*density,Path.Direction.CW);
+            outerMask.addPath(previewCutout);
+            overviewBackdrop.drawMask(canvas,outerMask,view.getWidth(),view.getHeight());
+            overviewPaint.setShader(null);
+            overviewPaint.setStyle(Paint.Style.STROKE);
+            overviewPaint.setStrokeWidth(1.2f*density);
+            overviewPaint.setColor(0x709BB9CB);
+            canvas.drawPath(previewCutout,overviewPaint);
+            return;
+        }
+        int bufferWidth=Math.min(1280,view.getWidth()),bufferHeight=Math.max(1,Math.round(view.getHeight()*bufferWidth/(float)view.getWidth()));
+        if(overviewBitmap==null||overviewBitmap.getWidth()!=bufferWidth||overviewBitmap.getHeight()!=bufferHeight){
+            if(overviewBitmap!=null)overviewBitmap.recycle();
+            overviewBitmap=Bitmap.createBitmap(bufferWidth,bufferHeight,Bitmap.Config.ARGB_8888);
+            view.previewDirty=true;
+            overviewCanvas=new Canvas(overviewBitmap);
+            overviewShader=new BitmapShader(overviewBitmap,Shader.TileMode.CLAMP,Shader.TileMode.CLAMP);
+        }
+        if(view.previewDirty){
+            overviewBitmap.eraseColor(Color.TRANSPARENT);
+            int bufferSave=overviewCanvas.save();
+            overviewCanvas.scale(bufferWidth/(float)view.getWidth(),bufferHeight/(float)view.getHeight());
+            view.drawScene(overviewCanvas);
+            overviewCanvas.restoreToCount(bufferSave);
+            view.previewDirty=false;
+        }
+        bufferMatrix.setScale(view.getWidth()/(float)bufferWidth,view.getHeight()/(float)bufferHeight);
+        overviewShader.setLocalMatrix(bufferMatrix);
+        int save=canvas.save();
+        canvas.concat(overviewMatrix);
+        frame.set(0,0,view.getWidth(),view.getHeight());
+        overviewPaint.setShader(overviewShader);
+        overviewPaint.setStyle(Paint.Style.FILL);
+        overviewPaint.setColor(Color.WHITE);
+        canvas.drawRoundRect(frame,radius,radius,overviewPaint);
+        overviewPaint.setShader(null);
+        overviewPaint.setStyle(Paint.Style.STROKE);
+        overviewPaint.setStrokeWidth(1.2f*density);
+        overviewPaint.setColor(0x709BB9CB);
+        canvas.drawRoundRect(frame,radius,radius,overviewPaint);
+        canvas.restoreToCount(save);
+    }
+}

@@ -1,0 +1,37 @@
+# 精简云构建：只跑官方工具链 bootstrap + build.py，产出可安装 APK
+name: Marco TV 云构建
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  PYTHONUTF8: '1'
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: MarcoTV
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: MarcoTV/.tools
+          key: marcotv-tools-${{ runner.os }}-${{ hashFiles('MarcoTV/scripts/bootstrap.py') }}
+      - name: 准备官方工具链
+        run: python scripts/bootstrap.py
+      - name: 构建 APK
+        run: python scripts/build.py
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MarcoTV-apk
+          path: |
+            MarcoTV/dist/*.apk
+            MarcoTV/dist/*.sha256
+          retention-days: 7
