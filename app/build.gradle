@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.example.hello'
+    namespace 'com.pilipala.tvhome'
     compileSdk 34
 
     defaultConfig {
-        applicationId 'com.example.hello'
+        applicationId 'com.pilipala.tvhome'
         minSdk 24
         targetSdk 34
         versionCode 1
